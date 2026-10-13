@@ -62,7 +62,9 @@ pub fn scan() -> Vec<Agent> {
         .map(|p| p.proc.started)
         .min()
         .and_then(|started| opencode_sessions(&home, started));
-    let mut sessions = HashSet::new();
+    let opencode_assigned = opencode_sessions
+        .as_deref()
+        .map(|sessions| opencode_assign(&procs, sessions));
 
     let mut agents: Vec<Agent> = procs
         .iter()
@@ -79,9 +81,7 @@ pub fn scan() -> Vec<Agent> {
             match p.kind {
                 Kind::Claude => claude(&mut agent, &home),
                 Kind::Codex => codex(&mut agent, p, files, &home, &mut claimed),
-                Kind::OpenCode => {
-                    opencode(&mut agent, p, opencode_sessions.as_deref(), &mut sessions)
-                }
+                Kind::OpenCode => opencode(&mut agent, opencode_assigned.as_ref()),
                 Kind::Pi => pi(&mut agent, p, files, &home, &mut claimed),
             }
             agent
@@ -283,6 +283,7 @@ struct OpenCodeSession {
     id: String,
     directory: PathBuf,
     title: String,
+    created: SystemTime,
     updated: SystemTime,
     status: Status,
     since: SystemTime,
@@ -300,7 +301,7 @@ fn opencode_sessions(home: &Path, started: SystemTime) -> Option<Vec<OpenCodeSes
     }
     let floor = millis(session_floor(started));
     let query = format!(
-        "SELECT s.id, s.directory, s.title, s.time_updated AS updated, \
+        "SELECT s.id, s.directory, s.title, s.time_created AS created, s.time_updated AS updated, \
            (SELECT json_object('role', json_extract(m.data, '$.role'), \
                                'finish', json_extract(m.data, '$.finish'), \
                                'time', json_object('created', m.time_created, \
@@ -344,28 +345,102 @@ fn opencode_session(row: &Value) -> Option<OpenCodeSession> {
         id: row["id"].as_str()?.to_owned(),
         directory: PathBuf::from(row["directory"].as_str()?),
         title: row["title"].as_str().unwrap_or_default().to_owned(),
+        created: at(&row["created"])?,
         updated,
         status,
         since: since.unwrap_or(updated),
     })
 }
 
-fn opencode(
-    agent: &mut Agent,
-    p: &AgentProc,
-    sessions: Option<&[OpenCodeSession]>,
-    claimed: &mut HashSet<String>,
-) {
-    let Some(sessions) = sessions else { return };
+static OPENCODE_ASSIGNED: LazyLock<Mutex<HashMap<u32, String>>> = LazyLock::new(Default::default);
+
+fn opencode_assign<'s>(
+    procs: &[AgentProc],
+    sessions: &'s [OpenCodeSession],
+) -> HashMap<u32, &'s OpenCodeSession> {
+    let procs: Vec<&AgentProc> = procs.iter().filter(|p| p.kind == Kind::OpenCode).collect();
+    let Ok(mut previous) = OPENCODE_ASSIGNED.lock() else {
+        return HashMap::new();
+    };
+    let assigned = opencode_match(&procs, sessions, &previous);
+    *previous = assigned
+        .iter()
+        .map(|(&pid, s)| (pid, s.id.clone()))
+        .collect();
+    assigned
+}
+
+fn opencode_match<'s>(
+    procs: &[&AgentProc],
+    sessions: &'s [OpenCodeSession],
+    previous: &HashMap<u32, String>,
+) -> HashMap<u32, &'s OpenCodeSession> {
+    let fits = |p: &AgentProc, s: &OpenCodeSession| {
+        Some(&s.directory) == p.cwd.as_ref() && s.updated >= session_floor(p.proc.started)
+    };
+    let mut taken: HashSet<&str> = HashSet::new();
+    let mut assigned: HashMap<u32, &OpenCodeSession> = HashMap::new();
+
+    for p in procs {
+        let explicit = opencode_session_arg(&p.proc.args);
+        let wanted = explicit.or_else(|| previous.get(&p.proc.pid).map(String::as_str));
+        let Some(s) = wanted.and_then(|id| sessions.iter().find(|s| s.id == id)) else {
+            continue;
+        };
+        if (explicit.is_some() || fits(p, s)) && taken.insert(&s.id) {
+            assigned.insert(p.proc.pid, s);
+        }
+    }
+
+    let mut rest: Vec<&AgentProc> = procs
+        .iter()
+        .copied()
+        .filter(|p| opencode_session_arg(&p.proc.args).is_none())
+        .collect();
+    rest.sort_by_key(|p| {
+        (
+            assigned.contains_key(&p.proc.pid),
+            std::cmp::Reverse(p.proc.started),
+        )
+    });
+    for p in rest {
+        let current = assigned.get(&p.proc.pid).map(|s| s.updated);
+        let floor = session_floor(p.proc.started);
+        let Some(s) = sessions
+            .iter()
+            .filter(|s| {
+                fits(p, s)
+                    && !taken.contains(s.id.as_str())
+                    && current.is_none_or(|t| s.updated > t)
+            })
+            .max_by_key(|s| (s.created >= floor, s.updated))
+        else {
+            continue;
+        };
+        if let Some(old) = assigned.insert(p.proc.pid, s) {
+            taken.remove(old.id.as_str());
+        }
+        taken.insert(&s.id);
+    }
+    assigned
+}
+
+fn opencode_session_arg(args: &[String]) -> Option<&str> {
+    if args.iter().any(|a| a == "--fork") {
+        return None;
+    }
+    args.iter().enumerate().find_map(|(i, a)| match a.as_str() {
+        "-s" | "--session" => args.get(i + 1).map(String::as_str),
+        _ => a.strip_prefix("--session="),
+    })
+}
+
+fn opencode(agent: &mut Agent, assigned: Option<&HashMap<u32, &OpenCodeSession>>) {
+    let Some(assigned) = assigned else { return };
     agent.status = Status::Idle;
-    let floor = session_floor(p.proc.started);
-    let Some(session) = sessions.iter().find(|s| {
-        Some(&s.directory) == p.cwd.as_ref() && s.updated >= floor && !claimed.contains(&s.id)
-    }) else {
+    let Some(session) = assigned.get(&agent.pid) else {
         return;
     };
-    claimed.insert(session.id.clone());
-
     agent.title =
         Some(session.title.clone()).filter(|t| !t.is_empty() && !t.starts_with("New session - "));
     if session.status != Status::Unknown {
@@ -622,7 +697,7 @@ mod tests {
         let row = |last: &str| {
             serde_json::json!({
                 "id": "ses_1", "directory": "/srv/api", "title": "Fix auth",
-                "updated": 3000, "turn": 1000, "last": last,
+                "created": 500, "updated": 3000, "turn": 1000, "last": last,
             })
         };
         let done = opencode_session(&row(
@@ -638,6 +713,62 @@ mod tests {
         .unwrap();
         assert_eq!(busy.status, Status::Working);
         assert_eq!(busy.since, UNIX_EPOCH + Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn keeps_opencode_sessions_with_their_process() {
+        let at = |s: u64| UNIX_EPOCH + Duration::from_secs(s);
+        let proc = |pid: u32, started: u64, args: &str| AgentProc {
+            kind: Kind::OpenCode,
+            proc: process::Proc {
+                pid,
+                ppid: 1,
+                started: at(started),
+                args: args.split_whitespace().map(str::to_owned).collect(),
+            },
+            cwd: Some(PathBuf::from("/srv/api")),
+        };
+        let session = |id: &str, created: u64, updated: u64| OpenCodeSession {
+            id: id.to_owned(),
+            directory: PathBuf::from("/srv/api"),
+            title: id.to_owned(),
+            created: at(created),
+            updated: at(updated),
+            status: Status::Idle,
+            since: at(updated),
+        };
+        let (a, b) = (proc(1, 100, "opencode"), proc(2, 100, "opencode"));
+        let procs = [&a, &b];
+        let pick = |procs: &[&AgentProc],
+                    sessions: &[OpenCodeSession],
+                    previous: &HashMap<u32, String>| {
+            opencode_match(procs, sessions, previous)
+                .into_iter()
+                .map(|(pid, s)| (pid, s.id.clone()))
+                .collect::<HashMap<_, _>>()
+        };
+
+        let first = pick(&procs, &[session("s1", 150, 200)], &HashMap::new());
+        assert_eq!(first.len(), 1);
+        let owner = *first.keys().next().unwrap();
+        let other = 3 - owner;
+
+        let sessions = [session("s2", 250, 300), session("s1", 150, 200)];
+        let second = pick(&procs, &sessions, &first);
+        assert_eq!(second[&owner], "s1");
+        assert_eq!(second[&other], "s2");
+
+        let sessions = [session("s1", 150, 400), session("s2", 250, 300)];
+        assert_eq!(pick(&procs, &sessions, &second), second);
+
+        let (early, late) = (proc(1, 100, "opencode"), proc(2, 200, "opencode"));
+        let sessions = [session("s2", 250, 400), session("s1", 150, 300)];
+        let fresh = pick(&[&early, &late], &sessions, &HashMap::new());
+        assert_eq!(fresh[&1], "s1");
+        assert_eq!(fresh[&2], "s2");
+
+        let pinned = proc(3, 100, "opencode -s s2");
+        assert_eq!(pick(&[&pinned], &sessions, &HashMap::new())[&3], "s2");
     }
 
     #[test]
