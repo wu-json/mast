@@ -400,20 +400,16 @@ fn opencode_match<'s>(
 
     for p in procs {
         let explicit = opencode_session_arg(&p.proc.args);
-        let wanted = explicit.or_else(|| previous.get(&p.proc.pid).map(String::as_str));
+        let wanted = previous.get(&p.proc.pid).map(String::as_str).or(explicit);
         let Some(s) = wanted.and_then(|id| sessions.iter().find(|s| s.id == id)) else {
             continue;
         };
-        if (explicit.is_some() || fits(p, s)) && taken.insert(&s.id) {
+        if (fits(p, s) || explicit == Some(s.id.as_str())) && taken.insert(&s.id) {
             assigned.insert(p.proc.pid, s);
         }
     }
 
-    let mut rest: Vec<&AgentProc> = procs
-        .iter()
-        .copied()
-        .filter(|p| opencode_session_arg(&p.proc.args).is_none())
-        .collect();
+    let mut rest = procs.to_vec();
     rest.sort_by_key(|p| {
         (
             assigned.contains_key(&p.proc.pid),
@@ -784,8 +780,11 @@ mod tests {
         assert_eq!(fresh[&1], "s1");
         assert_eq!(fresh[&2], "s2");
 
-        let pinned = proc(3, 100, "opencode -s s2");
-        assert_eq!(pick(&[&pinned], &sessions, &HashMap::new())[&3], "s2");
+        let pinned = proc(3, 500, "opencode -s s2");
+        let pinned_first = pick(&[&pinned], &sessions, &HashMap::new());
+        assert_eq!(pinned_first[&3], "s2");
+        let sessions = [session("s3", 600, 700), session("s2", 250, 300)];
+        assert_eq!(pick(&[&pinned], &sessions, &pinned_first)[&3], "s3");
     }
 
     #[test]
