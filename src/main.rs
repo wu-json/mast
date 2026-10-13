@@ -1,5 +1,6 @@
 mod agents;
 mod process;
+mod term;
 mod ui;
 
 use std::time::SystemTime;
@@ -18,12 +19,7 @@ keys: q / esc quit";
 
 fn main() -> std::io::Result<()> {
     match std::env::args().nth(1).as_deref() {
-        None => {
-            let terminal = ratatui::init();
-            let result = ui::run(terminal);
-            ratatui::restore();
-            result
-        }
+        None => ui::run(),
         Some("--once") => {
             once();
             Ok(())
