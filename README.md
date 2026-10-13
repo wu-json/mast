@@ -25,6 +25,10 @@ mast          # live view, q to quit
 mast --once   # tab-separated snapshot: agent, status, time in status, pid, cwd, title
 ```
 
+The live view also sets the terminal title, so a mast tab in WezTerm, iTerm2,
+tmux and so on reads like `⛵ mast · 1 needs you · 2 working`. When mast exits, the
+previous title comes back.
+
 ## How it works
 
 mast finds agent processes with `ps` (the same process-name matching
