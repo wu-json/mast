@@ -370,37 +370,67 @@ fn opencode_session(row: &Value) -> Option<OpenCodeSession> {
     })
 }
 
-static OPENCODE_ASSIGNED: LazyLock<Mutex<HashMap<u32, String>>> = LazyLock::new(Default::default);
+#[derive(Default)]
+struct OpenCodeState {
+    assigned: HashMap<u32, String>,
+    owners: HashMap<String, (u32, SystemTime)>,
+}
+
+static OPENCODE_STATE: LazyLock<Mutex<OpenCodeState>> = LazyLock::new(Default::default);
 
 fn opencode_assign<'s>(
     procs: &[&AgentProc],
     sessions: &'s [OpenCodeSession],
 ) -> HashMap<u32, &'s OpenCodeSession> {
-    let Ok(mut previous) = OPENCODE_ASSIGNED.lock() else {
+    let Ok(mut state) = OPENCODE_STATE.lock() else {
         return HashMap::new();
     };
-    let assigned = opencode_match(procs, sessions, &previous);
-    *previous = assigned
+    let assigned = opencode_match(procs, sessions, &state);
+    opencode_remember(&mut state, &assigned, sessions);
+    assigned
+}
+
+fn opencode_remember(
+    state: &mut OpenCodeState,
+    assigned: &HashMap<u32, &OpenCodeSession>,
+    sessions: &[OpenCodeSession],
+) {
+    state.assigned = assigned
         .iter()
         .map(|(&pid, s)| (pid, s.id.clone()))
         .collect();
-    assigned
+    state
+        .owners
+        .retain(|id, _| sessions.iter().any(|s| &s.id == id));
+    for (&pid, s) in assigned {
+        state.owners.insert(s.id.clone(), (pid, s.updated));
+    }
 }
 
 fn opencode_match<'s>(
     procs: &[&AgentProc],
     sessions: &'s [OpenCodeSession],
-    previous: &HashMap<u32, String>,
+    state: &OpenCodeState,
 ) -> HashMap<u32, &'s OpenCodeSession> {
     let fits = |p: &AgentProc, s: &OpenCodeSession| {
         Some(&s.directory) == p.cwd.as_ref() && s.updated >= session_floor(p.proc.started)
+    };
+    let free = |p: &AgentProc, s: &OpenCodeSession| match state.owners.get(&s.id) {
+        None => true,
+        Some(&(pid, seen)) => {
+            pid == p.proc.pid || (!procs.iter().any(|o| o.proc.pid == pid) && s.updated > seen)
+        }
     };
     let mut taken: HashSet<&str> = HashSet::new();
     let mut assigned: HashMap<u32, &OpenCodeSession> = HashMap::new();
 
     for p in procs {
         let explicit = opencode_session_arg(&p.proc.args);
-        let wanted = previous.get(&p.proc.pid).map(String::as_str).or(explicit);
+        let wanted = state
+            .assigned
+            .get(&p.proc.pid)
+            .map(String::as_str)
+            .or(explicit);
         let Some(s) = wanted.and_then(|id| sessions.iter().find(|s| s.id == id)) else {
             continue;
         };
@@ -423,6 +453,7 @@ fn opencode_match<'s>(
             .iter()
             .filter(|s| {
                 fits(p, s)
+                    && free(p, s)
                     && !taken.contains(s.id.as_str())
                     && current.is_none_or(|t| s.updated > t)
             })
@@ -750,41 +781,53 @@ mod tests {
             status: Status::Idle,
             since: at(updated),
         };
-        let (a, b) = (proc(1, 100, "opencode"), proc(2, 100, "opencode"));
-        let procs = [&a, &b];
-        let pick = |procs: &[&AgentProc],
-                    sessions: &[OpenCodeSession],
-                    previous: &HashMap<u32, String>| {
-            opencode_match(procs, sessions, previous)
-                .into_iter()
-                .map(|(pid, s)| (pid, s.id.clone()))
+        let ids = |assigned: &HashMap<u32, &OpenCodeSession>| {
+            assigned
+                .iter()
+                .map(|(&pid, s)| (pid, s.id.clone()))
                 .collect::<HashMap<_, _>>()
         };
+        let scan =
+            |state: &mut OpenCodeState, procs: &[&AgentProc], sessions: &[OpenCodeSession]| {
+                let assigned = opencode_match(procs, sessions, state);
+                opencode_remember(state, &assigned, sessions);
+                ids(&assigned)
+            };
 
-        let first = pick(&procs, &[session("s1", 150, 200)], &HashMap::new());
+        let (a, b) = (proc(1, 100, "opencode"), proc(2, 100, "opencode"));
+        let mut state = OpenCodeState::default();
+        let first = scan(&mut state, &[&a, &b], &[session("s1", 150, 200)]);
         assert_eq!(first.len(), 1);
         let owner = *first.keys().next().unwrap();
         let other = 3 - owner;
 
         let sessions = [session("s2", 250, 300), session("s1", 150, 200)];
-        let second = pick(&procs, &sessions, &first);
+        let second = scan(&mut state, &[&a, &b], &sessions);
         assert_eq!(second[&owner], "s1");
         assert_eq!(second[&other], "s2");
 
         let sessions = [session("s1", 150, 400), session("s2", 250, 300)];
-        assert_eq!(pick(&procs, &sessions, &second), second);
+        assert_eq!(scan(&mut state, &[&a, &b], &sessions), second);
+
+        let survivor = if owner == 1 { &a } else { &b };
+        let sessions = [session("s1", 150, 400), session("s2", 250, 300)];
+        assert_eq!(scan(&mut state, &[survivor], &sessions)[&owner], "s1");
+        let sessions = [session("s2", 250, 300), session("s1", 150, 200)];
+        assert_eq!(scan(&mut state, &[survivor], &sessions)[&owner], "s1");
+        let sessions = [session("s2", 250, 500), session("s1", 150, 200)];
+        assert_eq!(scan(&mut state, &[survivor], &sessions)[&owner], "s2");
 
         let (early, late) = (proc(1, 100, "opencode"), proc(2, 200, "opencode"));
         let sessions = [session("s2", 250, 400), session("s1", 150, 300)];
-        let fresh = pick(&[&early, &late], &sessions, &HashMap::new());
+        let fresh = scan(&mut OpenCodeState::default(), &[&early, &late], &sessions);
         assert_eq!(fresh[&1], "s1");
         assert_eq!(fresh[&2], "s2");
 
         let pinned = proc(3, 500, "opencode -s s2");
-        let pinned_first = pick(&[&pinned], &sessions, &HashMap::new());
-        assert_eq!(pinned_first[&3], "s2");
+        let mut state = OpenCodeState::default();
+        assert_eq!(scan(&mut state, &[&pinned], &sessions)[&3], "s2");
         let sessions = [session("s3", 600, 700), session("s2", 250, 300)];
-        assert_eq!(pick(&[&pinned], &sessions, &pinned_first)[&3], "s3");
+        assert_eq!(scan(&mut state, &[&pinned], &sessions)[&3], "s3");
     }
 
     #[test]
