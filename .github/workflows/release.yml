@@ -109,6 +109,10 @@ jobs:
           security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_SIGN_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
           rm "$RUNNER_TEMP/cert.p12"
+          curl -fsSLo "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          security find-identity -v -p codesigning "$keychain"
 
           codesign --force --options runtime --timestamp --keychain "$keychain" \
             --sign "Developer ID Application" "$BIN"
