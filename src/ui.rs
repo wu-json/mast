@@ -1,9 +1,12 @@
+use std::io::Write;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::SetTitle;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Stylize};
 use ratatui::text::Line;
@@ -24,14 +27,32 @@ const FAINT: Color = Color::Rgb(63, 63, 70);
 const ROSE: Color = Color::Rgb(236, 132, 122);
 const AMBER: Color = Color::Rgb(226, 190, 128);
 const SAGE: Color = Color::Rgb(138, 176, 142);
+
+const PUSH_TITLE: &str = "\x1b[22;0t";
+const POP_TITLE: &str = "\x1b[23;0t";
+
 pub fn run(mut terminal: DefaultTerminal) -> std::io::Result<()> {
+    write!(terminal.backend_mut(), "{PUSH_TITLE}")?;
+    let result = watch(&mut terminal);
+    write!(terminal.backend_mut(), "{POP_TITLE}")?;
+    terminal.backend_mut().flush()?;
+    result
+}
+
+fn watch(terminal: &mut DefaultTerminal) -> std::io::Result<()> {
     let scans = spawn_scanner();
     let started = Instant::now();
     let mut agents: Option<Vec<Agent>> = None;
+    let mut shown_title = String::new();
 
     loop {
         while let Ok(latest) = scans.try_recv() {
             agents = Some(latest);
+        }
+        let title = title(agents.as_deref().unwrap_or_default());
+        if title != shown_title {
+            execute!(terminal.backend_mut(), SetTitle(&title))?;
+            shown_title = title;
         }
         let tick = (started.elapsed().as_millis() / FRAME.as_millis()) as usize;
         terminal.draw(|f| draw(f, agents.as_deref(), tick))?;
@@ -91,31 +112,42 @@ fn draw(f: &mut Frame, agents: Option<&[Agent]>, tick: usize) {
     );
 }
 
+fn counts(agents: &[Agent]) -> impl Iterator<Item = (Status, usize)> {
+    [Status::Blocked, Status::Working, Status::Idle]
+        .into_iter()
+        .map(|status| (status, agents.iter().filter(|a| a.status == status).count()))
+        .filter(|&(_, n)| n > 0)
+}
+
+fn title(agents: &[Agent]) -> String {
+    let mut out = "⛵ mast".to_owned();
+    for (status, n) in counts(agents) {
+        out.push_str(&format!(" · {n} {}", status.label()));
+    }
+    out
+}
+
 fn draw_header(f: &mut Frame, area: Rect, agents: &[Agent]) {
     f.render_widget(
         Paragraph::new(Line::from(vec!["⛵ ".into(), "mast".fg(TEXT).bold()])),
         area,
     );
 
-    let mut counts = Vec::new();
-    for status in [Status::Blocked, Status::Working, Status::Idle] {
-        let n = agents.iter().filter(|a| a.status == status).count();
-        if n == 0 {
-            continue;
-        }
-        if !counts.is_empty() {
-            counts.push("  ·  ".fg(FAINT));
+    let mut spans = Vec::new();
+    for (status, n) in counts(agents) {
+        if !spans.is_empty() {
+            spans.push("  ·  ".fg(FAINT));
         }
         let accent = match status {
             Status::Blocked => ROSE,
             Status::Working => AMBER,
             _ => SAGE,
         };
-        counts.push(n.to_string().fg(accent));
-        counts.push(format!(" {}", status.label()).fg(DIM));
+        spans.push(n.to_string().fg(accent));
+        spans.push(format!(" {}", status.label()).fg(DIM));
     }
     f.render_widget(
-        Paragraph::new(Line::from(counts)).alignment(Alignment::Right),
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Right),
         area,
     );
 }
@@ -316,6 +348,17 @@ mod tests {
         assert!(out.contains("2h"));
 
         assert!(render(60, Some(&agents)).contains("Add retry to uploads"));
+    }
+
+    #[test]
+    fn titles_with_counts() {
+        assert_eq!(title(&[]), "⛵ mast");
+        let agents = [
+            agent(Kind::Claude, Status::Idle, "/srv/api", "a", 1),
+            agent(Kind::Codex, Status::Blocked, "/srv/web", "b", 1),
+            agent(Kind::Pi, Status::Idle, "/srv/docs", "c", 1),
+        ];
+        assert_eq!(title(&agents), "⛵ mast · 1 needs you · 2 idle");
     }
 
     #[test]
