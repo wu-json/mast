@@ -5,8 +5,9 @@ each one is doing.
 
 ![mast showing claude, codex and pi agents and what each is doing](assets/screenshot.png)
 
-Works with [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex)
-and [pi](https://github.com/badlogic/pi-mono), wherever they run: any terminal, tmux pane or IDE.
+Works with [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex),
+[opencode](https://opencode.ai) and [pi](https://github.com/badlogic/pi-mono), wherever they run:
+any terminal, tmux pane or IDE.
 
 ![mast picking up agents as they start, finish, stop to ask for permission and exit](assets/demo.gif)
 
@@ -46,9 +47,10 @@ While it runs, mast also sets your terminal's tab title, e.g. `⛵ mast · 1 nee
 
 mast finds agents in the process list (using the same name matching as
 [herdr](https://herdr.dev)), then reads the session files each one already
-writes under `~/.claude`, `~/.codex` and `~/.pi` to tell whether it's working,
-idle or waiting on you.
+writes under `~/.claude`, `~/.codex`, `~/.local/share/opencode` and `~/.pi` to
+tell whether it's working, idle or waiting on you. opencode keeps its sessions
+in SQLite, which mast reads through the `sqlite3` command line tool.
 
 It only reads files, so there's nothing to install into the agents. Custom
 config directories set with `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or
-`PI_CODING_AGENT_DIR` are picked up.
+`PI_CODING_AGENT_DIR`, `XDG_DATA_HOME` or `OPENCODE_DB` are picked up.

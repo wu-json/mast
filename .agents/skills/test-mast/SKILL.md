@@ -1,6 +1,6 @@
 ---
 name: test-mast
-description: How to test mast — unit/render tests, plus driving real claude, codex and pi sessions in a pseudo-terminal to verify mast detects their idle, working and needs-you states. Use after changing process discovery, state detection, or the TUI.
+description: How to test mast — unit/render tests, plus driving real claude, codex, opencode and pi sessions in a pseudo-terminal to verify mast detects their idle, working and needs-you states. Use after changing process discovery, state detection, or the TUI.
 ---
 
 # Testing mast
@@ -42,6 +42,7 @@ a prompt, and prints the matching `mast --once` row every 5 seconds:
 cargo build
 python3 scripts/agent_pty.py -- codex
 python3 scripts/agent_pty.py -- pi
+python3 scripts/agent_pty.py -- opencode -m opencode/big-pickle      # free model, no login
 python3 scripts/agent_pty.py --keys '\x1b[B\r' -- claude          # accept the folder trust dialog
 python3 scripts/agent_pty.py --keys '\x1b[B\r' \
   --prompt "run the shell command: touch /tmp/mast-perm-test" \
@@ -65,8 +66,8 @@ Notes:
   as a nested session, never writes `~/.claude/sessions/<pid>.json`, and shows
   as `unknown`.
 - The agent is killed when the script exits; nothing is left running.
-- Codex has no on-disk signal for approval prompts, so it only reports
-  `working` / `idle`.
+- Codex and opencode have no on-disk signal for approval prompts, so they
+  only report `working` / `idle`. opencode keeps pending permissions in memory.
 
 ## Where each state comes from
 
@@ -74,6 +75,7 @@ Notes:
 | ------ | ------ | ------ |
 | claude | `~/.claude/sessions/<pid>.json` `status`: `busy` / `waiting` / `idle`; title from the last `custom-title` or `ai-title` entry in `~/.claude/projects/<cwd>/<sessionId>.jsonl` | working / needs you / idle |
 | codex  | latest `task_started` vs `task_complete` / `turn_aborted` in the rollout under `~/.codex/sessions/` | working / idle |
+| opencode | last root `session` for the cwd in `~/.local/share/opencode/opencode.db`, read with `sqlite3 -readonly -json`; its last `message` is in flight if it's a user message, has no `time.completed`, or finished with `tool-calls` | working / idle |
 | pi     | last `message` in `~/.pi/agent/sessions/--<cwd>--/*.jsonl`; `user`, `toolResult` or assistant `toolUse` means a turn is in flight | working / idle |
 
 If an agent changes its on-disk format, reproduce with step 3, inspect the

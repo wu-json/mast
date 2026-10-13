@@ -190,7 +190,7 @@ fn tone(status: Status) -> Tone {
 
 fn draw_table(f: &mut Frame, area: Rect, agents: &[Agent], tick: usize) {
     const GAP: u16 = 2;
-    const FIXED: [u16; 4] = [1, 6, 9, 4];
+    const FIXED: [u16; 4] = [1, 8, 9, 4];
     let now = SystemTime::now();
     let title_w = area
         .width
@@ -251,6 +251,7 @@ fn kind_color(kind: Kind) -> Color {
     match kind {
         Kind::Claude => Color::Rgb(196, 146, 124),
         Kind::Codex => Color::Rgb(134, 162, 199),
+        Kind::OpenCode => Color::Rgb(150, 182, 142),
         Kind::Pi => Color::Rgb(168, 150, 204),
     }
 }
@@ -337,13 +338,15 @@ mod tests {
                 "write the readme",
                 7200,
             ),
+            agent(Kind::OpenCode, Status::Idle, "/srv/cli", "Tidy flags", 60),
         ];
         let out = render(100, Some(&agents));
         println!("{out}");
         assert!(out.contains("mast"));
         assert!(!out.contains("───"));
-        assert!(out.contains("1 needs you  ·  1 working  ·  1 idle"));
-        assert!(out.contains("claude  fix-auth"));
+        assert!(out.contains("1 needs you  ·  1 working  ·  2 idle"));
+        assert!(out.contains("claude    fix-auth"));
+        assert!(out.contains("opencode  Tidy flags"));
         assert!(!out.contains("/srv/api"));
         assert!(out.contains("2h"));
 

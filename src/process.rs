@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 pub enum Kind {
     Claude,
     Codex,
+    OpenCode,
     Pi,
 }
 
@@ -15,6 +16,7 @@ impl Kind {
         match self {
             Kind::Claude => "claude",
             Kind::Codex => "codex",
+            Kind::OpenCode => "opencode",
             Kind::Pi => "pi",
         }
     }
@@ -78,17 +80,19 @@ pub fn scan() -> Vec<AgentProc> {
 
 fn identify(args: &[String]) -> Option<Kind> {
     let argv0 = basename(args.first()?);
-    let name = match argv0 {
+    let (at, name) = match argv0 {
         "node" | "bun" | "deno" => args
             .iter()
+            .enumerate()
             .skip(1)
-            .find(|a| !a.starts_with('-'))
-            .map(|a| strip_script_ext(basename(a)))?,
-        other => other,
+            .find(|(_, a)| !a.starts_with('-'))
+            .map(|(i, a)| (i, strip_script_ext(basename(a))))?,
+        other => (0, other),
     };
     let kind = match name {
         "claude" | "claude-code" => Kind::Claude,
         "codex" => Kind::Codex,
+        "opencode" => Kind::OpenCode,
         "pi" => Kind::Pi,
         _ => return None,
     };
@@ -99,7 +103,26 @@ fn identify(args: &[String]) -> Option<Kind> {
     {
         return None;
     }
+    if kind == Kind::OpenCode && matches!(opencode_command(&args[at + 1..]), Some("serve" | "web"))
+    {
+        return None;
+    }
     Some(kind)
+}
+
+fn opencode_command(args: &[String]) -> Option<&str> {
+    let mut args = args.iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--log-level" | "--port" | "--hostname" | "--mdns-domain" | "--cors" | "-m"
+            | "--model" | "-s" | "--session" | "--prompt" | "--agent" | "--replay-limit" => {
+                args.next();
+            }
+            a if a.starts_with('-') => {}
+            a => return Some(a),
+        }
+    }
+    None
 }
 
 fn basename(s: &str) -> &str {
@@ -246,6 +269,24 @@ mod tests {
         );
         assert_eq!(identify(&args("/usr/local/bin/pi -c")), Some(Kind::Pi));
         assert_eq!(identify(&args("codex app-server --listen unix://")), None);
+        assert_eq!(identify(&args("opencode")), Some(Kind::OpenCode));
+        assert_eq!(
+            identify(&args(
+                "node /usr/lib/node_modules/opencode-ai/bin/opencode -c"
+            )),
+            Some(Kind::OpenCode)
+        );
+        assert_eq!(
+            identify(&args("opencode run fix the serve command")),
+            Some(Kind::OpenCode)
+        );
+        assert_eq!(identify(&args("opencode serve --port 4096")), None);
+        assert_eq!(identify(&args("opencode --log-level DEBUG serve")), None);
+        assert_eq!(
+            identify(&args("opencode -m opencode/big-pickle --prompt web")),
+            Some(Kind::OpenCode)
+        );
+        assert_eq!(identify(&args("bun /opt/opencode/bin/opencode web")), None);
         assert_eq!(
             identify(&args("/Applications/Claude.app/Contents/MacOS/Claude")),
             None
