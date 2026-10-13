@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Drive a real coding agent in a pseudo-terminal and snapshot `mast --once`.
-
-Lets an agent (or a human) watch mast's state detection change as a live
-claude / codex / pi session goes idle -> working -> idle, without tmux.
-
-usage: scripts/agent_pty.py [--cwd DIR] [--prompt TEXT] [--wait SECS] -- AGENT [ARGS...]
-"""
 
 import argparse
 import os
@@ -20,12 +13,11 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAST = os.path.join(ROOT, "target", "debug", "mast")
 
-# Agent TUIs block on startup until the terminal answers these queries.
 REPLIES = [
-    (b"\x1b[6n", b"\x1b[1;1R"),  # cursor position
-    (b"\x1b[c", b"\x1b[?62c"),  # primary device attributes
-    (b"\x1b]10;?", b"\x1b]10;rgb:cccc/cccc/cccc\x1b\\"),  # foreground color
-    (b"\x1b]11;?", b"\x1b]11;rgb:1111/1111/1111\x1b\\"),  # background color
+    (b"\x1b[6n", b"\x1b[1;1R"),
+    (b"\x1b[c", b"\x1b[?62c"),
+    (b"\x1b]10;?", b"\x1b]10;rgb:cccc/cccc/cccc\x1b\\"),
+    (b"\x1b]11;?", b"\x1b]11;rgb:1111/1111/1111\x1b\\"),
 ]
 
 
@@ -51,8 +43,6 @@ def main() -> int:
 
     pid, fd = pty.fork()
     if pid == 0:
-        # When run from inside an agent, drop the markers that make the child
-        # think it is a nested session (nested claude skips its session file).
         for key in list(os.environ):
             if key.startswith(("CLAUDECODE", "CLAUDE_CODE_", "CODEX_THREAD", "HERDR_")):
                 del os.environ[key]
@@ -78,7 +68,6 @@ def main() -> int:
                     os.write(fd, reply)
 
     def family() -> set:
-        # Launchers often re-exec or fork the real agent, so match the whole tree.
         rows = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True).stdout
         children = {}
         for row in rows.split("\n"):
@@ -120,7 +109,7 @@ def main() -> int:
             os.kill(pid, 9)
             os.waitpid(pid, 0)
         except (ProcessLookupError, ChildProcessError):
-            pass  # the agent already exited
+            pass
     return 0
 
 

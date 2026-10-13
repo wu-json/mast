@@ -1,17 +1,3 @@
-//! Resolves what each running agent is doing from the state it keeps on disk.
-//!
-//! herdr reads agent state off the screens of panes it owns. mast
-//! watches agents running in any terminal, so instead it reads the session
-//! files each agent already writes:
-//!
-//! - claude: `~/.claude/sessions/<pid>.json` carries a live `status`; the
-//!   session transcript holds the AI-generated title (the same one claude
-//!   puts in the terminal title bar).
-//! - codex:  the rollout `~/.codex/sessions/**/rollout-*.jsonl` logs
-//!   `task_started` / `task_complete` / `turn_aborted` events.
-//! - pi:     `~/.pi/agent/sessions/<cwd>/*.jsonl` logs every message; a turn is
-//!   in flight until the assistant stops without asking for a tool.
-
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -25,7 +11,6 @@ use crate::process::{self, AgentProc, Kind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Status {
-    /// Waiting on a human: a permission prompt or a question.
     Blocked,
     Working,
     Idle,
@@ -50,7 +35,6 @@ pub struct Agent {
     pub cwd: Option<PathBuf>,
     pub title: Option<String>,
     pub status: Status,
-    /// When the agent entered its current status.
     pub since: SystemTime,
 }
 
@@ -64,8 +48,6 @@ pub fn scan() -> Vec<Agent> {
         .map(|p| p.proc.pid)
         .collect();
     let open = process::open_files(&codex_pids);
-    // Files an agent holds open are definitely its own; keep the cwd-based
-    // fallback from handing them to a neighbour in the same directory.
     let mut claimed: HashSet<PathBuf> = open
         .values()
         .flatten()
@@ -111,8 +93,6 @@ fn env_dir(var: &str, default: impl FnOnce() -> PathBuf) -> PathBuf {
         .unwrap_or_else(default)
 }
 
-// ---------------------------------------------------------------- claude
-
 fn claude(agent: &mut Agent, home: &Path) {
     let dir = env_dir("CLAUDE_CONFIG_DIR", || home.join(".claude"));
     let Ok(raw) = fs::read(dir.join("sessions").join(format!("{}.json", agent.pid))) else {
@@ -149,8 +129,6 @@ fn claude(agent: &mut Agent, home: &Path) {
         });
 }
 
-/// Transcripts live in `projects/<cwd with non-alphanumerics as '-'>/<id>.jsonl`.
-/// The session may have moved since it started (worktrees), so fall back to a search.
 fn claude_transcript(dir: &Path, cwd: Option<&Path>, id: &str) -> Option<PathBuf> {
     let projects = dir.join("projects");
     let file = format!("{id}.jsonl");
@@ -179,11 +157,8 @@ struct TitleScan {
     ai: Option<String>,
 }
 
-/// Transcripts grow to many megabytes, so remember how far each one has been
-/// read and only parse what was appended since.
 static TITLES: LazyLock<Mutex<HashMap<PathBuf, TitleScan>>> = LazyLock::new(Default::default);
 
-/// A `/rename` title wins over the AI-generated one.
 fn claude_title(path: &Path) -> Option<String> {
     let mut titles = TITLES.lock().ok()?;
     let scan = titles.entry(path.to_owned()).or_default();
@@ -199,7 +174,7 @@ fn claude_title(path: &Path) -> Option<String> {
         let mut line = String::new();
         while let Ok(n) = reader.read_line(&mut line) {
             if n == 0 || !line.ends_with('\n') {
-                break; // EOF, or a line still being written
+                break;
             }
             scan.offset += n as u64;
             if line.contains("-title\"")
@@ -221,8 +196,6 @@ fn claude_title(path: &Path) -> Option<String> {
         .or_else(|| scan.ai.clone())
         .filter(|t| !t.is_empty())
 }
-
-// ----------------------------------------------------------------- codex
 
 fn codex(
     agent: &mut Agent,
@@ -294,8 +267,6 @@ fn codex_thread_name(dir: &Path, id: &str) -> Option<String> {
         .last()
 }
 
-// -------------------------------------------------------------------- pi
-
 fn pi(
     agent: &mut Agent,
     p: &AgentProc,
@@ -345,7 +316,6 @@ fn pi(
     }
 }
 
-/// pi stores sessions under the cwd with separators flattened: `/a/b` -> `--a-b--`.
 fn pi_slug(cwd: &Path) -> String {
     let s = cwd.to_string_lossy();
     let flat: String = s
@@ -372,8 +342,6 @@ fn first_text(content: &Value) -> Option<String> {
     Some(line.to_owned())
 }
 
-// ------------------------------------------------------------ file utils
-
 fn is_jsonl(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "jsonl")
 }
@@ -392,7 +360,6 @@ fn list_jsonl(dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Rollouts live in `sessions/YYYY/MM/DD/`; only look at the most recent days.
 fn recent_files(sessions: &Path, days: usize) -> Vec<PathBuf> {
     fn sorted_dirs(dir: &Path) -> Vec<PathBuf> {
         let mut dirs: Vec<PathBuf> = fs::read_dir(dir)
@@ -414,7 +381,6 @@ fn recent_files(sessions: &Path, days: usize) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Newest unclaimed session file written since the process started.
 fn newest_matching(
     files: Vec<PathBuf>,
     p: &AgentProc,
@@ -444,7 +410,6 @@ fn first_line(path: &Path) -> Option<Value> {
     serde_json::from_str(&line).ok()
 }
 
-/// Parsed JSON lines from the last chunk of a log, oldest first.
 fn tail_json(path: &Path) -> Vec<Value> {
     const TAIL: u64 = 512 * 1024;
     let Ok(mut file) = File::open(path) else {
@@ -462,12 +427,11 @@ fn tail_json(path: &Path) -> Vec<Value> {
     let text = String::from_utf8_lossy(&buf);
     let mut lines = text.lines();
     if start > 0 {
-        lines.next(); // likely cut mid-line
+        lines.next();
     }
     lines.filter_map(|l| serde_json::from_str(l).ok()).collect()
 }
 
-/// `YYYY-MM-DDTHH:MM:SS[.fff]Z`, the only shape these logs write.
 fn parse_rfc3339(s: &str) -> Option<SystemTime> {
     let s = s.strip_suffix('Z')?;
     let (date, time) = s.split_once('T')?;
@@ -478,7 +442,6 @@ fn parse_rfc3339(s: &str) -> Option<SystemTime> {
     let (hh, mm, ss) = (t.next()?.ok()?, t.next()?.ok()?, t.next()?.ok()?);
     let nanos: u32 = format!("{frac:0<9}").get(..9)?.parse().ok()?;
 
-    // Howard Hinnant's days_from_civil.
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;

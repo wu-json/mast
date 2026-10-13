@@ -1,5 +1,3 @@
-//! Process table discovery for coding agents.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -37,7 +35,6 @@ pub struct AgentProc {
     pub cwd: Option<PathBuf>,
 }
 
-/// Every running claude / codex / pi process, with wrapper processes collapsed.
 pub fn scan() -> Vec<AgentProc> {
     let procs = list_processes();
     let by_pid: HashMap<u32, &Proc> = procs.iter().map(|p| (p.pid, p)).collect();
@@ -47,8 +44,6 @@ pub fn scan() -> Vec<AgentProc> {
         .filter_map(|p| identify(&p.args).map(|k| (k, p)))
         .collect();
 
-    // A launcher (npm shim, shell wrapper) and the real agent both match; keep
-    // the innermost process so open files and state belong to the real agent.
     let mut wrappers = Vec::new();
     for (kind, p) in &found {
         let mut cur = p.ppid;
@@ -81,11 +76,9 @@ pub fn scan() -> Vec<AgentProc> {
         .collect()
 }
 
-/// Mirrors herdr's process-name lookup, narrowed to the agents we track.
 fn identify(args: &[String]) -> Option<Kind> {
     let argv0 = basename(args.first()?);
     let name = match argv0 {
-        // Script installs run as `node /path/to/pi` or `bun .../codex.js`.
         "node" | "bun" | "deno" => args
             .iter()
             .skip(1)
@@ -99,7 +92,6 @@ fn identify(args: &[String]) -> Option<Kind> {
         "pi" => Kind::Pi,
         _ => return None,
     };
-    // Codex ships long-lived background servers under the same binary name.
     if kind == Kind::Codex
         && args
             .iter()
@@ -150,7 +142,6 @@ fn list_processes() -> Vec<Proc> {
         .collect()
 }
 
-/// `[[dd-]hh:]mm:ss`
 fn parse_etime(s: &str) -> Option<Duration> {
     let (days, rest) = match s.split_once('-') {
         Some((d, r)) => (d.parse::<u64>().ok()?, r),
@@ -182,7 +173,6 @@ fn cwds(pids: &[u32]) -> HashMap<u32, PathBuf> {
         .collect()
 }
 
-/// Files the given processes currently hold open.
 pub fn open_files(pids: &[u32]) -> HashMap<u32, Vec<PathBuf>> {
     #[cfg(target_os = "linux")]
     {

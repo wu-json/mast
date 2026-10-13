@@ -17,7 +17,6 @@ const SCAN_EVERY: Duration = Duration::from_millis(1000);
 const FRAME: Duration = Duration::from_millis(80);
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-// Zinc grays carry the text; muted accents carry meaning.
 const TEXT: Color = Color::Rgb(228, 228, 231);
 const SOFT: Color = Color::Rgb(161, 161, 170);
 const DIM: Color = Color::Rgb(113, 113, 122);
@@ -51,7 +50,6 @@ pub fn run(mut terminal: DefaultTerminal) -> std::io::Result<()> {
     }
 }
 
-/// Scanning shells out to ps/lsof, so keep it off the render loop.
 fn spawn_scanner() -> Receiver<Vec<Agent>> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -122,7 +120,6 @@ fn draw_header(f: &mut Frame, area: Rect, agents: &[Agent]) {
     );
 }
 
-/// Per-status styling: active rows stand forward, idle rows recede.
 struct Tone {
     glyph: Color,
     title: Color,
@@ -161,7 +158,7 @@ fn tone(status: Status) -> Tone {
 
 fn draw_table(f: &mut Frame, area: Rect, agents: &[Agent], tick: usize) {
     const GAP: u16 = 2;
-    const FIXED: [u16; 4] = [1, 6, 9, 4]; // glyph, agent, status, time
+    const FIXED: [u16; 4] = [1, 6, 9, 4];
     let now = SystemTime::now();
     let title_w = area
         .width
@@ -176,7 +173,6 @@ fn draw_table(f: &mut Frame, area: Rect, agents: &[Agent], tick: usize) {
             Status::Unknown => "·",
         };
         let since = now.duration_since(a.since).unwrap_or_default();
-        // Without a title, the project folder is the next best name.
         let title = a
             .title
             .clone()
@@ -219,7 +215,6 @@ fn ellipsize(s: &str, width: usize) -> String {
     out
 }
 
-/// Each agent gets a desaturated hue so they read apart without shouting.
 fn kind_color(kind: Kind) -> Color {
     match kind {
         Kind::Claude => Color::Rgb(196, 146, 124),
@@ -320,7 +315,6 @@ mod tests {
         assert!(!out.contains("/srv/api"));
         assert!(out.contains("2h"));
 
-        // Titles survive narrow terminals.
         assert!(render(60, Some(&agents)).contains("Add retry to uploads"));
     }
 
