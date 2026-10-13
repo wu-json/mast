@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ratatui = "0.30.2"
-serde = { version = "1.0.229", features = ["derive"] }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 serde_json = "1.0.154"
 
 [profile.release]
+opt-level = "z"
 strip = true
 lto = true
 codegen-units = 1
