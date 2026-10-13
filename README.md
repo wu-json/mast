@@ -47,5 +47,13 @@ config directories set with `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or
 
 ## Name
 
-A [mast](https://en.wikipedia.org/wiki/Mast_(sailing)) holds the crow's nest:
-the lookout where you watch over everything at once.
+A [mast](https://en.wikipedia.org/wiki/Mast_(sailing)) holds the
+[crow's nest](https://en.wikipedia.org/wiki/Crow%27s_nest): the lookout where
+you watch over everything at once.
+
+<img src="assets/crows-nest.jpg" alt="A crow's nest on a tug boat's mast" width="240">
+
+I thought about calling it crow's nest, but mast is easier to type.
+
+<sub>Photo: [Crows nest on a tug boat](https://commons.wikimedia.org/wiki/File:Crows_nest_on_a_tug_boat_-_Flickr_-_p_a_h.jpg)
+by [Paul](https://www.flickr.com/people/64654599@N00), [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/).</sub>
