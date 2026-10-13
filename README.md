@@ -3,16 +3,14 @@
 A small terminal UI that shows every coding agent running on your machine and
 what each one is doing.
 
-```
-  ⛵ mast                                             1 working  ·  2 idle
-
-  ⠋  claude  Migrate billing to v2                        working     8m
-  ●  codex   Add retry to uploads                         idle       11m
-  ●  pi      write the readme                             idle        2h
-```
+![mast showing claude, codex and pi agents and what each is doing](assets/screenshot.png)
 
 Supports [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex)
 and [pi](https://github.com/badlogic/pi-mono), in any terminal, tmux pane or IDE.
+
+## Demo
+
+![mast picking up agents as they start, finish, stop to ask for permission and exit](assets/demo.gif)
 
 ## Install
 
@@ -50,3 +48,14 @@ the lookout where you watch over everything at once.
 ## Testing
 
 See [`.agents/skills/test-mast/SKILL.md`](.agents/skills/test-mast/SKILL.md).
+
+## Recording the demo
+
+The screenshot and GIF above are rendered with [VHS](https://github.com/charmbracelet/vhs)
+in Docker against fake agent sessions, so nothing from your machine ends up in them:
+
+```sh
+demo/render.sh
+```
+
+See [`.agents/skills/record-demo/SKILL.md`](.agents/skills/record-demo/SKILL.md).
