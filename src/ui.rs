@@ -251,6 +251,7 @@ fn kind_color(kind: Kind) -> Color {
     match kind {
         Kind::Claude => Color::Rgb(196, 146, 124),
         Kind::Codex => Color::Rgb(134, 162, 199),
+        Kind::OpenCode => Color::Rgb(150, 182, 142),
         Kind::Pi => Color::Rgb(168, 150, 204),
     }
 }

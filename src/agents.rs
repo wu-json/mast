@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -44,7 +45,7 @@ pub fn scan() -> Vec<Agent> {
 
     let codex_pids: Vec<u32> = procs
         .iter()
-        .filter(|p| p.kind != Kind::Claude)
+        .filter(|p| matches!(p.kind, Kind::Codex | Kind::Pi))
         .map(|p| p.proc.pid)
         .collect();
     let open = process::open_files(&codex_pids);
@@ -54,6 +55,14 @@ pub fn scan() -> Vec<Agent> {
         .filter(|f| is_jsonl(f))
         .cloned()
         .collect();
+
+    let opencode_sessions = procs
+        .iter()
+        .filter(|p| p.kind == Kind::OpenCode)
+        .map(|p| p.proc.started)
+        .min()
+        .and_then(|started| opencode_sessions(&home, started));
+    let mut sessions = HashSet::new();
 
     let mut agents: Vec<Agent> = procs
         .iter()
@@ -70,6 +79,9 @@ pub fn scan() -> Vec<Agent> {
             match p.kind {
                 Kind::Claude => claude(&mut agent, &home),
                 Kind::Codex => codex(&mut agent, p, files, &home, &mut claimed),
+                Kind::OpenCode => {
+                    opencode(&mut agent, p, opencode_sessions.as_deref(), &mut sessions)
+                }
                 Kind::Pi => pi(&mut agent, p, files, &home, &mut claimed),
             }
             agent
@@ -267,6 +279,114 @@ fn codex_thread_name(dir: &Path, id: &str) -> Option<String> {
         .last()
 }
 
+struct OpenCodeSession {
+    id: String,
+    directory: PathBuf,
+    title: String,
+    updated: SystemTime,
+    status: Status,
+    since: SystemTime,
+}
+
+fn opencode_sessions(home: &Path, started: SystemTime) -> Option<Vec<OpenCodeSession>> {
+    let data = env_dir("XDG_DATA_HOME", || home.join(".local").join("share")).join("opencode");
+    let db = match std::env::var_os("OPENCODE_DB") {
+        Some(db) if db == ":memory:" => return None,
+        Some(db) => data.join(db),
+        None => data.join("opencode.db"),
+    };
+    if !db.exists() {
+        return None;
+    }
+    let floor = millis(session_floor(started));
+    let query = format!(
+        "SELECT s.id, s.directory, s.title, s.time_updated AS updated, \
+           (SELECT json_object('role', json_extract(m.data, '$.role'), \
+                               'finish', json_extract(m.data, '$.finish'), \
+                               'time', json_object('created', m.time_created, \
+                                                   'completed', json_extract(m.data, '$.time.completed'))) \
+            FROM message m WHERE m.session_id = s.id \
+            ORDER BY m.time_created DESC, m.id DESC LIMIT 1) AS last, \
+           (SELECT max(m.time_created) FROM message m \
+            WHERE m.session_id = s.id AND json_extract(m.data, '$.role') = 'user') AS turn \
+         FROM session s WHERE s.parent_id IS NULL AND s.time_updated >= {floor} \
+         ORDER BY s.time_updated DESC"
+    );
+    let out = Command::new("sqlite3")
+        .args(["-readonly", "-json", "-cmd", ".timeout 250"])
+        .arg(&db)
+        .arg(query)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    if out.stdout.iter().all(u8::is_ascii_whitespace) {
+        return Some(Vec::new());
+    }
+    let rows: Vec<Value> = serde_json::from_slice(&out.stdout).ok()?;
+    Some(rows.iter().filter_map(opencode_session).collect())
+}
+
+fn opencode_session(row: &Value) -> Option<OpenCodeSession> {
+    let at = |v: &Value| v.as_u64().map(|ms| UNIX_EPOCH + Duration::from_millis(ms));
+    let updated = at(&row["updated"])?;
+    let last: Value = row["last"]
+        .as_str()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    let status = opencode_message_status(&last);
+    let since = match status {
+        Status::Working => at(&row["turn"]).or_else(|| at(&last["time"]["created"])),
+        _ => at(&last["time"]["completed"]),
+    };
+    Some(OpenCodeSession {
+        id: row["id"].as_str()?.to_owned(),
+        directory: PathBuf::from(row["directory"].as_str()?),
+        title: row["title"].as_str().unwrap_or_default().to_owned(),
+        updated,
+        status,
+        since: since.unwrap_or(updated),
+    })
+}
+
+fn opencode(
+    agent: &mut Agent,
+    p: &AgentProc,
+    sessions: Option<&[OpenCodeSession]>,
+    claimed: &mut HashSet<String>,
+) {
+    let Some(sessions) = sessions else { return };
+    agent.status = Status::Idle;
+    let floor = session_floor(p.proc.started);
+    let Some(session) = sessions.iter().find(|s| {
+        Some(&s.directory) == p.cwd.as_ref() && s.updated >= floor && !claimed.contains(&s.id)
+    }) else {
+        return;
+    };
+    claimed.insert(session.id.clone());
+
+    agent.title =
+        Some(session.title.clone()).filter(|t| !t.is_empty() && !t.starts_with("New session - "));
+    if session.status != Status::Unknown {
+        agent.status = session.status;
+        agent.since = session.since;
+    }
+}
+
+fn opencode_message_status(v: &Value) -> Status {
+    match (
+        v["role"].as_str(),
+        v["time"]["completed"].as_u64(),
+        v["finish"].as_str(),
+    ) {
+        (Some("assistant"), Some(_), Some("tool-calls" | "unknown")) => Status::Working,
+        (Some("assistant"), Some(_), _) => Status::Idle,
+        (Some("user" | "assistant"), _, _) => Status::Working,
+        _ => Status::Unknown,
+    }
+}
+
 fn pi(
     agent: &mut Agent,
     p: &AgentProc,
@@ -381,17 +501,23 @@ fn recent_files(sessions: &Path, days: usize) -> Vec<PathBuf> {
         .collect()
 }
 
+fn session_floor(started: SystemTime) -> SystemTime {
+    started
+        .checked_sub(Duration::from_secs(5))
+        .unwrap_or(UNIX_EPOCH)
+}
+
+fn millis(t: SystemTime) -> u128 {
+    t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis())
+}
+
 fn newest_matching(
     files: Vec<PathBuf>,
     p: &AgentProc,
     claimed: &HashSet<PathBuf>,
     accept: impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
-    let floor = p
-        .proc
-        .started
-        .checked_sub(Duration::from_secs(5))
-        .unwrap_or(UNIX_EPOCH);
+    let floor = session_floor(p.proc.started);
     let mut files: Vec<(SystemTime, PathBuf)> = files
         .into_iter()
         .filter(|f| !claimed.contains(f))
@@ -464,6 +590,54 @@ mod tests {
         assert_eq!(ms, 1_791_867_799_834);
         assert!(parse_rfc3339("1970-01-01T00:00:00Z").is_some());
         assert!(parse_rfc3339("garbage").is_none());
+    }
+
+    #[test]
+    fn reads_opencode_turns() {
+        let status = |v: Value| opencode_message_status(&v);
+        assert_eq!(
+            status(serde_json::json!({"role": "user", "time": {"created": 1}})),
+            Status::Working
+        );
+        assert_eq!(
+            status(serde_json::json!({"role": "assistant", "time": {"created": 1}})),
+            Status::Working
+        );
+        assert_eq!(
+            status(serde_json::json!({
+                "role": "assistant", "time": {"created": 1, "completed": 2}, "finish": "tool-calls"
+            })),
+            Status::Working
+        );
+        assert_eq!(
+            status(serde_json::json!({
+                "role": "assistant", "time": {"created": 1, "completed": 2}, "finish": "stop"
+            })),
+            Status::Idle
+        );
+    }
+
+    #[test]
+    fn reads_opencode_session_rows() {
+        let row = |last: &str| {
+            serde_json::json!({
+                "id": "ses_1", "directory": "/srv/api", "title": "Fix auth",
+                "updated": 3000, "turn": 1000, "last": last,
+            })
+        };
+        let done = opencode_session(&row(
+            r#"{"role":"assistant","finish":"stop","time":{"created":2000,"completed":2500}}"#,
+        ))
+        .unwrap();
+        assert_eq!(done.status, Status::Idle);
+        assert_eq!(done.since, UNIX_EPOCH + Duration::from_millis(2500));
+
+        let busy = opencode_session(&row(
+            r#"{"role":"assistant","finish":null,"time":{"created":2000,"completed":null}}"#,
+        ))
+        .unwrap();
+        assert_eq!(busy.status, Status::Working);
+        assert_eq!(busy.since, UNIX_EPOCH + Duration::from_millis(1000));
     }
 
     #[test]
