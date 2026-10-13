@@ -417,9 +417,7 @@ fn opencode_match<'s>(
     };
     let free = |p: &AgentProc, s: &OpenCodeSession| match state.owners.get(&s.id) {
         None => true,
-        Some(&(pid, seen)) => {
-            pid == p.proc.pid || (!procs.iter().any(|o| o.proc.pid == pid) && s.updated > seen)
-        }
+        Some(&(pid, seen)) => pid == p.proc.pid || s.updated > seen,
     };
     let mut taken: HashSet<&str> = HashSet::new();
     let mut assigned: HashMap<u32, &OpenCodeSession> = HashMap::new();
@@ -822,6 +820,17 @@ mod tests {
         let fresh = scan(&mut OpenCodeState::default(), &[&early, &late], &sessions);
         assert_eq!(fresh[&1], "s1");
         assert_eq!(fresh[&2], "s2");
+
+        let mut state = OpenCodeState::default();
+        let sessions = [session("s2", 250, 300)];
+        assert_eq!(scan(&mut state, &[&late], &sessions)[&2], "s2");
+        let sessions = [session("s3", 350, 400), session("s2", 250, 300)];
+        assert_eq!(scan(&mut state, &[&late], &sessions)[&2], "s3");
+        let newcomer = proc(4, 450, "opencode");
+        let sessions = [session("s2", 250, 500), session("s3", 350, 400)];
+        let resumed = scan(&mut state, &[&late, &newcomer], &sessions);
+        assert_eq!(resumed[&4], "s2");
+        assert_eq!(resumed[&2], "s3");
 
         let pinned = proc(3, 500, "opencode -s s2");
         let mut state = OpenCodeState::default();
