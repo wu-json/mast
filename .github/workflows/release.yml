@@ -135,7 +135,7 @@ jobs:
           file "$BIN"
           name="mast_${VERSION}_${{ matrix.asset }}"
           mkdir "$name"
-          cp "$BIN" README.md "$name/"
+          cp "$BIN" README.md LICENSE "$name/"
           tar -czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v7.0.2
         with:
