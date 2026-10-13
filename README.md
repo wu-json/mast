@@ -10,6 +10,12 @@ and [pi](https://github.com/badlogic/pi-mono), wherever they run: any terminal, 
 
 ![mast picking up agents as they start, finish, stop to ask for permission and exit](assets/demo.gif)
 
+<img src="assets/crows-nest.jpg" alt="1867 illustration of a lookout with a telescope in a barrel crow's nest atop a ship's mast" width="160">
+
+<sub>A [mast](https://en.wikipedia.org/wiki/Mast_(sailing)) holds the [crow's nest](https://en.wikipedia.org/wiki/Crow%27s_nest),
+the lookout where you watch over everything at once. I thought about calling it crow's nest, but mast is easier to type.
+([Illustration](https://commons.wikimedia.org/wiki/File:(1867)_p184_I_SCORESBYS_TUNNA.jpg), 1867.)</sub>
+
 ## Install
 
 With [Homebrew](https://brew.sh) on macOS or Linux:
@@ -44,15 +50,3 @@ idle or waiting on you.
 It only reads files, so there's nothing to install into the agents. Custom
 config directories set with `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or
 `PI_CODING_AGENT_DIR` are picked up.
-
-## Name
-
-A [mast](https://en.wikipedia.org/wiki/Mast_(sailing)) holds the
-[crow's nest](https://en.wikipedia.org/wiki/Crow%27s_nest): the lookout where
-you watch over everything at once.
-
-<img src="assets/crows-nest.jpg" alt="1867 illustration of a lookout with a telescope in a barrel crow's nest atop a ship's mast" width="240">
-
-I thought about calling it crow's nest, but mast is easier to type.
-
-<sub>Illustration: [I Scoresbys tunna](https://commons.wikimedia.org/wiki/File:(1867)_p184_I_SCORESBYS_TUNNA.jpg) (1867), public domain.</sub>
