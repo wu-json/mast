@@ -12,7 +12,13 @@ and [pi](https://github.com/badlogic/pi-mono), wherever they run: any terminal, 
 
 ## Install
 
-Grab a binary for macOS or Linux from [Releases](https://github.com/wu-json/mast/releases),
+With [Homebrew](https://brew.sh) on macOS or Linux:
+
+```sh
+brew install wu-json/asahi/mast
+```
+
+Or grab a binary from [Releases](https://github.com/wu-json/mast/releases),
 or build from source:
 
 ```sh
