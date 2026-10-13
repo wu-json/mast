@@ -14,8 +14,11 @@ and [pi](https://github.com/badlogic/pi-mono), in any terminal, tmux pane or IDE
 
 ## Install
 
+Download a binary for macOS or Linux (x86_64 or arm64) from
+[Releases](https://github.com/wu-json/mast/releases), or build from source:
+
 ```sh
-cargo install --path .
+cargo install --git https://github.com/wu-json/mast
 ```
 
 ## Usage
@@ -52,6 +55,13 @@ the lookout where you watch over everything at once.
 ## Testing
 
 See [`.agents/skills/test-mast/SKILL.md`](.agents/skills/test-mast/SKILL.md).
+
+## Releasing
+
+Run the [Release](https://github.com/wu-json/mast/actions/workflows/release.yml) workflow
+and pick patch, minor or major. It bumps the version in `Cargo.toml`, tags it, builds
+each platform on its own runner, signs and notarizes the macOS binaries, and publishes
+a GitHub release. Tick `dry_run` to build and sign without pushing or publishing.
 
 ## Recording the demo
 

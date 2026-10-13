@@ -1,0 +1,159 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: Type of version bump
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: Build and sign, but don't push the version bump or publish a release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bump:
+    name: Bump version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - id: bump
+        env:
+          BUMP: ${{ inputs.version_type }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          current=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "mast") | .version')
+          IFS=. read -r major minor patch <<< "$current"
+          case "$BUMP" in
+            major) version="$((major + 1)).0.0" ;;
+            minor) version="$major.$((minor + 1)).0" ;;
+            patch) version="$major.$minor.$((patch + 1))" ;;
+          esac
+          echo "$current -> $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          sed -i "0,/^version = .*/s//version = \"$version\"/" Cargo.toml
+          cargo update --workspace
+          git diff
+
+          if [ "$DRY_RUN" = true ]; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): v$version"
+          git tag -a "v$version" -m "Release v$version"
+          git push --follow-tags
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: bump
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, asset: linux_amd64 }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, asset: linux_arm64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, asset: darwin_arm64 }
+          - { os: macos-latest, target: x86_64-apple-darwin, asset: darwin_amd64 }
+    env:
+      VERSION: ${{ needs.bump.outputs.version }}
+      BIN: target/${{ matrix.target }}/release/mast
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.bump.outputs.version) }}
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Sign and notarize
+        if: runner.os == 'macOS'
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          if [ -z "$MACOS_SIGN_P12" ]; then
+            echo "::warning::MACOS_SIGN_P12 is not set, shipping an unsigned binary"
+            exit 0
+          fi
+
+          keychain="$RUNNER_TEMP/sign.keychain-db"
+          keychain_password=$(openssl rand -base64 24)
+          echo "$MACOS_SIGN_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_SIGN_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          rm "$RUNNER_TEMP/cert.p12"
+
+          codesign --force --options runtime --timestamp --keychain "$keychain" \
+            --sign "Developer ID Application" "$BIN"
+          codesign --verify --strict --verbose=2 "$BIN"
+
+          echo "$MACOS_NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/key.p8"
+          ditto -c -k "$BIN" "$RUNNER_TEMP/mast.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/mast.zip" \
+            --key "$RUNNER_TEMP/key.p8" --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
+            --wait --timeout 20m --output-format json | tee "$RUNNER_TEMP/notary.json"
+          rm "$RUNNER_TEMP/key.p8"
+          status=$(jq -r .status "$RUNNER_TEMP/notary.json")
+          if [ "$status" != Accepted ]; then
+            echo "::error::notarization finished with status $status"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          file "$BIN"
+          name="mast_${VERSION}_${{ matrix.asset }}"
+          mkdir "$name"
+          cp "$BIN" README.md "$name/"
+          tar -czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ${{ matrix.asset }}
+          path: mast_*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [bump, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.bump.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum mast_*.tar.gz > "mast_${VERSION}_checksums.txt"
+          gh release create "v$VERSION" mast_* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "v$VERSION"
