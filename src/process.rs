@@ -1,7 +1,7 @@
 //! Process table discovery for coding agents.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
@@ -227,9 +227,7 @@ fn lsof(pids: &[u32], extra: &[&str]) -> HashMap<u32, Vec<PathBuf>> {
         } else if let (Some(path), Some(pid)) = (line.strip_prefix('n'), current)
             && path.starts_with('/')
         {
-            map.entry(pid)
-                .or_default()
-                .push(Path::new(path).to_path_buf());
+            map.entry(pid).or_default().push(PathBuf::from(path));
         }
     }
     map
