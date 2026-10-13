@@ -56,15 +56,22 @@ pub fn scan() -> Vec<Agent> {
         .cloned()
         .collect();
 
-    let opencode_sessions = procs
+    let opencode_procs: Vec<&AgentProc> =
+        procs.iter().filter(|p| p.kind == Kind::OpenCode).collect();
+    let opencode_sessions = opencode_procs
         .iter()
-        .filter(|p| p.kind == Kind::OpenCode)
         .map(|p| p.proc.started)
         .min()
-        .and_then(|started| opencode_sessions(&home, started));
+        .and_then(|started| {
+            let pinned: Vec<&str> = opencode_procs
+                .iter()
+                .filter_map(|p| opencode_session_arg(&p.proc.args))
+                .collect();
+            opencode_sessions(&home, started, &pinned)
+        });
     let opencode_assigned = opencode_sessions
         .as_deref()
-        .map(|sessions| opencode_assign(&procs, sessions));
+        .map(|sessions| opencode_assign(&opencode_procs, sessions));
 
     let mut agents: Vec<Agent> = procs
         .iter()
@@ -289,7 +296,11 @@ struct OpenCodeSession {
     since: SystemTime,
 }
 
-fn opencode_sessions(home: &Path, started: SystemTime) -> Option<Vec<OpenCodeSession>> {
+fn opencode_sessions(
+    home: &Path,
+    started: SystemTime,
+    pinned: &[&str],
+) -> Option<Vec<OpenCodeSession>> {
     let data = env_dir("XDG_DATA_HOME", || home.join(".local").join("share")).join("opencode");
     let db = match std::env::var_os("OPENCODE_DB") {
         Some(db) if db == ":memory:" => return None,
@@ -300,6 +311,12 @@ fn opencode_sessions(home: &Path, started: SystemTime) -> Option<Vec<OpenCodeSes
         return None;
     }
     let floor = millis(session_floor(started));
+    let pinned = pinned
+        .iter()
+        .filter(|id| id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .map(|id| format!("'{id}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let query = format!(
         "SELECT s.id, s.directory, s.title, s.time_created AS created, s.time_updated AS updated, \
            (SELECT json_object('role', json_extract(m.data, '$.role'), \
@@ -310,7 +327,8 @@ fn opencode_sessions(home: &Path, started: SystemTime) -> Option<Vec<OpenCodeSes
             ORDER BY m.time_created DESC, m.id DESC LIMIT 1) AS last, \
            (SELECT max(m.time_created) FROM message m \
             WHERE m.session_id = s.id AND json_extract(m.data, '$.role') = 'user') AS turn \
-         FROM session s WHERE s.parent_id IS NULL AND s.time_updated >= {floor} \
+         FROM session s \
+         WHERE s.parent_id IS NULL AND (s.time_updated >= {floor} OR s.id IN ({pinned})) \
          ORDER BY s.time_updated DESC"
     );
     let out = Command::new("sqlite3")
@@ -355,14 +373,13 @@ fn opencode_session(row: &Value) -> Option<OpenCodeSession> {
 static OPENCODE_ASSIGNED: LazyLock<Mutex<HashMap<u32, String>>> = LazyLock::new(Default::default);
 
 fn opencode_assign<'s>(
-    procs: &[AgentProc],
+    procs: &[&AgentProc],
     sessions: &'s [OpenCodeSession],
 ) -> HashMap<u32, &'s OpenCodeSession> {
-    let procs: Vec<&AgentProc> = procs.iter().filter(|p| p.kind == Kind::OpenCode).collect();
     let Ok(mut previous) = OPENCODE_ASSIGNED.lock() else {
         return HashMap::new();
     };
-    let assigned = opencode_match(&procs, sessions, &previous);
+    let assigned = opencode_match(procs, sessions, &previous);
     *previous = assigned
         .iter()
         .map(|(&pid, s)| (pid, s.id.clone()))

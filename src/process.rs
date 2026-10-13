@@ -103,14 +103,26 @@ fn identify(args: &[String]) -> Option<Kind> {
     {
         return None;
     }
-    if kind == Kind::OpenCode
-        && args
-            .get(at + 1)
-            .is_some_and(|a| matches!(a.as_str(), "serve" | "web"))
+    if kind == Kind::OpenCode && matches!(opencode_command(&args[at + 1..]), Some("serve" | "web"))
     {
         return None;
     }
     Some(kind)
+}
+
+fn opencode_command(args: &[String]) -> Option<&str> {
+    let mut args = args.iter();
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--log-level" | "--port" | "--hostname" | "--mdns-domain" | "--cors" | "-m"
+            | "--model" | "-s" | "--session" | "--prompt" | "--agent" | "--replay-limit" => {
+                args.next();
+            }
+            a if a.starts_with('-') => {}
+            a => return Some(a),
+        }
+    }
+    None
 }
 
 fn basename(s: &str) -> &str {
@@ -269,6 +281,11 @@ mod tests {
             Some(Kind::OpenCode)
         );
         assert_eq!(identify(&args("opencode serve --port 4096")), None);
+        assert_eq!(identify(&args("opencode --log-level DEBUG serve")), None);
+        assert_eq!(
+            identify(&args("opencode -m opencode/big-pickle --prompt web")),
+            Some(Kind::OpenCode)
+        );
         assert_eq!(identify(&args("bun /opt/opencode/bin/opencode web")), None);
         assert_eq!(
             identify(&args("/Applications/Claude.app/Contents/MacOS/Claude")),
