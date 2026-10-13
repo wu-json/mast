@@ -10,7 +10,7 @@ and [pi](https://github.com/badlogic/pi-mono), wherever they run: any terminal, 
 
 ![mast picking up agents as they start, finish, stop to ask for permission and exit](assets/demo.gif)
 
-<img src="assets/crows-nest.jpg" alt="1867 illustration of a lookout with a telescope in a barrel crow's nest atop a ship's mast" width="160">
+<img src="assets/crows-nest-1867.jpg" alt="1867 illustration of a lookout with a telescope in a barrel crow's nest atop a ship's mast" width="160">
 
 <sub>A [mast](https://en.wikipedia.org/wiki/Mast_(sailing)) holds the [crow's nest](https://en.wikipedia.org/wiki/Crow%27s_nest),
 the lookout where you watch over everything at once. I thought about calling it crow's nest, but mast is easier to type.
