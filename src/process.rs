@@ -78,15 +78,25 @@ pub fn scan() -> Vec<AgentProc> {
         .collect()
 }
 
+const PI_SCRIPTS: [&str; 2] = [
+    "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+    "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+];
+
 fn identify(args: &[String]) -> Option<Kind> {
     let argv0 = basename(args.first()?);
     let (at, name) = match argv0 {
-        "node" | "bun" | "deno" => args
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find(|(_, a)| !a.starts_with('-'))
-            .map(|(i, a)| (i, strip_script_ext(basename(a))))?,
+        "node" | "bun" | "deno" => {
+            let (i, script) = args
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find(|(_, a)| !a.starts_with('-'))?;
+            if PI_SCRIPTS.iter().any(|s| script.ends_with(s)) {
+                return Some(Kind::Pi);
+            }
+            (i, strip_script_ext(basename(script)))
+        }
         other => (0, other),
     };
     let kind = match name {
@@ -268,6 +278,19 @@ mod tests {
             Some(Kind::Codex)
         );
         assert_eq!(identify(&args("/usr/local/bin/pi -c")), Some(Kind::Pi));
+        assert_eq!(
+            identify(&args(
+                "node /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
+            )),
+            Some(Kind::Pi)
+        );
+        assert_eq!(
+            identify(&args(
+                "node /usr/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js -c"
+            )),
+            Some(Kind::Pi)
+        );
+        assert_eq!(identify(&args("node /srv/app/dist/cli.js")), None);
         assert_eq!(identify(&args("codex app-server --listen unix://")), None);
         assert_eq!(identify(&args("opencode")), Some(Kind::OpenCode));
         assert_eq!(
