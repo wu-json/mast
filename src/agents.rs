@@ -122,7 +122,7 @@ fn claude(agent: &mut Agent, home: &Path) {
     };
 
     agent.status = match v["status"].as_str() {
-        Some("busy") => Status::Working,
+        Some("busy" | "shell") => Status::Working,
         Some("waiting" | "blocked") => Status::Blocked,
         Some("idle") => Status::Idle,
         _ => Status::Unknown,
