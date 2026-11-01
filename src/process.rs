@@ -107,9 +107,12 @@ fn identify(args: &[String]) -> Option<Kind> {
         _ => return None,
     };
     if kind == Kind::Codex
-        && args
-            .iter()
-            .any(|a| matches!(a.as_str(), "app-server" | "mcp-server" | "mcp" | "login"))
+        && args.iter().any(|a| {
+            matches!(
+                a.as_str(),
+                "app-server" | "exec-server" | "mcp-server" | "mcp" | "login"
+            )
+        })
     {
         return None;
     }
@@ -292,6 +295,12 @@ mod tests {
         );
         assert_eq!(identify(&args("node /srv/app/dist/cli.js")), None);
         assert_eq!(identify(&args("codex app-server --listen unix://")), None);
+        assert_eq!(
+            identify(&args(
+                "codex -c forced_login_method=\"chatgpt\" exec-server --remote https://example.com"
+            )),
+            None
+        );
         assert_eq!(identify(&args("opencode")), Some(Kind::OpenCode));
         assert_eq!(
             identify(&args(
